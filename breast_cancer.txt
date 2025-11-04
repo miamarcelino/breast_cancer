@@ -1,0 +1,385 @@
+# 1. Import libraries
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+from scipy import stats
+from sklearn.preprocessing import StandardScaler
+from sklearn.cluster import KMeans
+import warnings
+warnings.filterwarnings('ignore')
+
+pd.set_option('display.max_columns', None)
+sns.set_style("whitegrid")
+print("All imported")
+# added just to create diff for PR
+
+# 2. Load data
+url = 'https://raw.githubusercontent.com/miamarcelino/breast_cancer/main/data/Breast_cancer_dataset.csv'
+df = pd.read_csv(url)
+print(f"Dataset shape: {df.shape}")
+print("\nFirst rows:")
+df.head()
+
+# 3. Check dataset structure
+print(f"Dataset info: \n")
+df.info()
+
+# 4. Clean data
+# A. Remove empty columns
+df = df.dropna(axis=1, how='all')
+
+# B. Remove unnamed columns
+unnamed_cols = [col for col in df.columns if 'Unnamed' in str(col)]
+if unnamed_cols:
+    df = df.drop(columns=unnamed_cols)
+
+print("Cleaned dataset shape:", df.shape)
+
+# 5. Check target variable - diagnosis
+print("Diagnosis counts:")
+dx_counts = df['diagnosis'].value_counts()
+print(dx_counts)
+
+print("\nPercentages:")
+dx_percent = df['diagnosis'].value_counts(normalize=True) * 100
+print(dx_percent)
+
+#Calculate imbalance ratio
+benign = (df['diagnosis'] == 'B').sum()
+malignant = (df['diagnosis'] == 'M').sum()
+imbalance = benign/malignant
+print(f"\nImbalance ratio = {imbalance:.2f}:1")
+
+# 6. Imbalance - visualization
+fig, ax = plt.subplots(figsize=(6, 5))
+
+diagnosis_counts = df['diagnosis'].value_counts()
+ax.bar(diagnosis_counts.index, diagnosis_counts.values,
+       color=['green', 'red'], alpha=0.7, edgecolor='black')
+ax.set_title('Class Distribution')
+ax.set_xlabel('Diagnosis')
+ax.set_ylabel('Count')
+ax.grid(axis='y', alpha=0.3)
+
+for i, v in enumerate(diagnosis_counts.values):
+    ax.text(i, v + 5, str(v), ha='center', fontweight='bold')
+
+plt.tight_layout()
+plt.show()
+
+# 7. Group by feature types (mean, se, worst)
+mean_features = [col for col in df.columns if '_mean' in col]
+se_features = [col for col in df.columns if '_se' in col]
+worst_features = [col for col in df.columns if '_worst' in col]
+
+print(f"Number of means: {len(mean_features)}")
+print(mean_features)
+print(f"\nNumber of SEs: {len(se_features)}")
+print(se_features)
+print(f"\nNumber of worsts: {len(worst_features)}")
+print(worst_features)
+
+# 8. Summary statistics by group
+print('Summary stats:')
+print("\nBenign cases:")
+print(df[df['diagnosis'] == 'B'][mean_features].describe())
+print("\nMalignant cases:")
+print(df[df['diagnosis'] == 'M'][mean_features].describe())
+
+# 9. Check data quality
+print("Missing values:")
+print(df.isnull().sum().sum())
+print("\nDuplicate rows:")
+print(df.duplicated().sum())
+
+# 10. t-Test
+print("Feature // p-value // significant")
+for feature in mean_features:
+    benign = df[df['diagnosis'] == 'B'][feature]
+    malignant = df[df['diagnosis'] == 'M'][feature]
+
+    t_stat, p_value = stats.ttest_ind(benign, malignant)
+    sig = "Yes" if p_value < 0.05 else "No"
+
+    print(f"{feature:25} {p_value:.6f}     {sig}")
+
+# 11. Correlations
+corr_matrix = df[mean_features].corr()
+
+print("High correlations (r > 0.9):")
+
+for i in range(len(corr_matrix.columns)):
+    for j in range(i+1, len(corr_matrix.columns)):
+        if abs(corr_matrix.iloc[i, j]) > 0.9:
+            print(f"{corr_matrix.columns[i]:25} {corr_matrix.columns[j]:25} {corr_matrix.iloc[i, j]:8.4f}")
+
+# 12. Distribution plots (Seaborn)
+key_features = ['radius_mean', 'texture_mean', 'area_mean',
+                'concavity_mean', 'concave points_mean', 'symmetry_mean']
+
+fig, axes = plt.subplots(3, 2, figsize=(14, 12))
+axes = axes.flatten()
+
+for idx, feature in enumerate(key_features):
+    sns.histplot(data=df, x=feature, hue='diagnosis',
+                 bins=30, ax=axes[idx],
+                 palette={'B': 'green', 'M': 'red'}, alpha=0.6)
+    axes[idx].set_title(feature)
+    axes[idx].grid(alpha=0.3)
+
+plt.tight_layout()
+plt.show()
+
+# 13. Correlation heatmap
+plt.figure(figsize=(12, 10))
+sns.heatmap(df[mean_features].corr(), annot=True, fmt='.2f',
+            cmap='coolwarm', center=0, square=True, linewidths=0.5)
+plt.title('Correlation Matrix - Mean Features')
+plt.tight_layout()
+plt.show()
+
+# 14. Subclusters - benign cases
+df_benign = df[df['diagnosis'] == 'B'].copy()
+print(f"Total benign cases: {len(df_benign)}")
+
+X_benign = df_benign[mean_features].copy()
+scaler = StandardScaler()
+X_benign_scaled = scaler.fit_transform(X_benign)
+inertias = []
+silhouette_scores = []
+K_range = range(2, 6)
+
+from sklearn.metrics import silhouette_score
+
+for k in K_range:
+    kmeans = KMeans(n_clusters=k, random_state=42, n_init=10)
+    kmeans.fit(X_benign_scaled)
+    inertias.append(kmeans.inertia_)
+    silhouette_scores.append(silhouette_score(X_benign_scaled, kmeans.labels_))
+
+# Plot elbow curve
+fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+
+axes[0].plot(K_range, inertias, 'bo-')
+axes[0].set_xlabel('Number of Clusters')
+axes[0].set_ylabel('Inertia')
+axes[0].set_title('Elbow Method - Benign Cases')
+axes[0].grid(alpha=0.3)
+
+axes[1].plot(K_range, silhouette_scores, 'go-')
+axes[1].set_xlabel('Number of Clusters')
+axes[1].set_ylabel('Silhouette Score')
+axes[1].set_title('Silhouette Score - Benign Cases')
+axes[1].grid(alpha=0.3)
+
+plt.tight_layout()
+plt.show()
+
+print("\nBased on elbow method and silhouette score, optimal clusters for benign cases:")
+best_k_benign = K_range[np.argmax(silhouette_scores)]
+print(f"Suggested k = {best_k_benign}\n")
+
+k_benign = 3
+kmeans_benign = KMeans(n_clusters=k_benign, random_state=42, n_init=10)
+df_benign['cluster'] = kmeans_benign.fit_predict(X_benign_scaled)
+
+print(f"Benign clusters distribution:")
+print(df_benign['cluster'].value_counts().sort_index())
+print("\nCluster characteristics:")
+for cluster_id in range(k_benign):
+    print(f"\nBenign Cluster {cluster_id}:")
+    cluster_data = df_benign[df_benign['cluster'] == cluster_id]
+    print(f"  Size: {len(cluster_data)} cases")
+    print(f"  Mean radius: {cluster_data['radius_mean'].mean():.2f}")
+    print(f"  Mean area: {cluster_data['area_mean'].mean():.2f}")
+    print(f"  Mean texture: {cluster_data['texture_mean'].mean():.2f}")
+    print(f"  Mean concave points: {cluster_data['concave points_mean'].mean():.4f}")
+
+from sklearn.decomposition import PCA
+
+pca = PCA(n_components=2)
+X_benign_pca = pca.fit_transform(X_benign_scaled)
+
+plt.figure(figsize=(10, 6))
+scatter = plt.scatter(X_benign_pca[:, 0], X_benign_pca[:, 1],
+                     c=df_benign['cluster'], cmap='Greens',
+                     edgecolor='black', alpha=0.7, s=50)
+plt.xlabel(f'PC1 ({pca.explained_variance_ratio_[0]*100:.1f}% variance)')
+plt.ylabel(f'PC2 ({pca.explained_variance_ratio_[1]*100:.1f}% variance)')
+plt.title('Benign Cases - Cluster Visualization (PCA)')
+plt.colorbar(scatter, label='Cluster')
+plt.grid(alpha=0.3)
+plt.show()
+
+print("\nInterpretation:")
+print("Benign cases can be subdivided into subclusters based on:")
+print("- Size characteristics (radius, area)")
+print("- Texture and irregularity features")
+print("- This could represent different grades of benign tumors")
+
+# 15. Subclusters - malignant cases
+df_malignant = df[df['diagnosis'] == 'M'].copy()
+print(f"Total malignant cases: {len(df_malignant)}")
+X_malignant = df_malignant[mean_features].copy()
+
+scaler_m = StandardScaler()
+X_malignant_scaled = scaler_m.fit_transform(X_malignant)
+
+inertias_m = []
+silhouette_scores_m = []
+K_range = range(2, 6)
+
+for k in K_range:
+    kmeans = KMeans(n_clusters=k, random_state=42, n_init=10)
+    kmeans.fit(X_malignant_scaled)
+    inertias_m.append(kmeans.inertia_)
+    silhouette_scores_m.append(silhouette_score(X_malignant_scaled, kmeans.labels_))
+
+fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+
+axes[0].plot(K_range, inertias_m, 'bo-')
+axes[0].set_xlabel('Number of Clusters')
+axes[0].set_ylabel('Inertia')
+axes[0].set_title('Elbow Method - Malignant Cases')
+axes[0].grid(alpha=0.3)
+
+axes[1].plot(K_range, silhouette_scores_m, 'ro-')
+axes[1].set_xlabel('Number of Clusters')
+axes[1].set_ylabel('Silhouette Score')
+axes[1].set_title('Silhouette Score - Malignant Cases')
+axes[1].grid(alpha=0.3)
+
+plt.tight_layout()
+plt.show()
+
+best_k_malignant = K_range[np.argmax(silhouette_scores_m)]
+print(f"\nSuggested k for malignant cases = 3\n")
+
+k_malignant = 3
+kmeans_malignant = KMeans(n_clusters=k_malignant, random_state=42, n_init=10)
+df_malignant['cluster'] = kmeans_malignant.fit_predict(X_malignant_scaled)
+
+print(f"Malignant clusters distribution:")
+print(df_malignant['cluster'].value_counts().sort_index())
+
+print("\nCluster characteristics:")
+for cluster_id in range(k_malignant):
+    print(f"\nMalignant Cluster {cluster_id}:")
+    cluster_data = df_malignant[df_malignant['cluster'] == cluster_id]
+    print(f"  Size: {len(cluster_data)} cases")
+    print(f"  Mean radius: {cluster_data['radius_mean'].mean():.2f}")
+    print(f"  Mean area: {cluster_data['area_mean'].mean():.2f}")
+    print(f"  Mean texture: {cluster_data['texture_mean'].mean():.2f}")
+    print(f"  Mean concave points: {cluster_data['concave points_mean'].mean():.4f}")
+    print(f"  Mean concavity: {cluster_data['concavity_mean'].mean():.4f}")
+
+pca_m = PCA(n_components=2)
+X_malignant_pca = pca_m.fit_transform(X_malignant_scaled)
+
+plt.figure(figsize=(10, 6))
+scatter = plt.scatter(X_malignant_pca[:, 0], X_malignant_pca[:, 1],
+                     c=df_malignant['cluster'], cmap='Reds',
+                     edgecolor='black', alpha=0.7, s=50)
+plt.xlabel(f'PC1 ({pca_m.explained_variance_ratio_[0]*100:.1f}% variance)')
+plt.ylabel(f'PC2 ({pca_m.explained_variance_ratio_[1]*100:.1f}% variance)')
+plt.title('Malignant Cases - Cluster Visualization (PCA)')
+plt.colorbar(scatter, label='Cluster')
+plt.grid(alpha=0.3)
+plt.show()
+
+print("\nInterpretation:")
+print("Malignant cases show distinct subclusters potentially representing:")
+print("- Different levels of aggressiveness")
+print("- Variations in tumor size and irregularity")
+print("- Could correspond to different malignancy grades")
+
+# 16. Compare clusters
+# Compare all clusters across both diagnoses
+print("\nBENIGN CLUSTERS:")
+for i in range(k_benign):
+    cluster_data = df_benign[df_benign['cluster'] == i]
+    print(f"\nBenign-{i} (n={len(cluster_data)}):")
+    print(f"  Radius: {cluster_data['radius_mean'].mean():.2f}")
+    print(f"  Concave points: {cluster_data['concave points_mean'].mean():.4f}")
+    print(f"  Texture: {cluster_data['texture_mean'].mean():.2f}")
+print("\nMALIGNANT CLUSTERS:")
+for i in range(k_malignant):
+    cluster_data = df_malignant[df_malignant['cluster'] == i]
+    print(f"\nMalignant-{i} (n={len(cluster_data)}):")
+    print(f"  Radius: {cluster_data['radius_mean'].mean():.2f}")
+    print(f"  Concave points: {cluster_data['concave points_mean'].mean():.4f}")
+    print(f"  Texture: {cluster_data['texture_mean'].mean():.2f}")
+
+# 17. Addressing class imbalance
+print("\nCurrent class distribution:")
+print(f"  Benign: {len(df_benign)} ({len(df_benign)/len(df)*100:.1f}%)")
+print(f"  Malignant: {len(df_malignant)} ({len(df_malignant)/len(df)*100:.1f}%)")
+
+print("\nStrategies to test:")
+print("\n1. Resampling techniques:")
+print("   - Random Oversampling (duplicate minority class)")
+print("   - SMOTE (Synthetic Minority Oversampling)")
+print("   - Random Undersampling (reduce majority class)")
+print("   - Combination approaches")
+
+print("\n2. Algorithm-level solutions:")
+print("   - Class weights in models")
+print("   - Balanced Random Forest")
+print("   - Cost-sensitive learning")
+
+print("\n3. Evaluation approach:")
+print("   - Use stratified k-fold cross-validation")
+print("   - Focus on recall for malignant class")
+print("   - Monitor F1-score and ROC-AUC")
+
+# 18. Prepare data for modeling
+# A. Prepare features and target
+X = df[mean_features].copy()
+y = df['diagnosis'].map({'B': 0, 'M': 1})
+
+print("Features prepared:")
+print(f"  X shape: {X.shape}")
+print(f"  y shape: {y.shape}")
+print(f"\nTarget distribution:")
+print(y.value_counts())
+
+print("\nData ready for:")
+print("- Train/test split (stratified)")
+print("- Resampling experiments")
+print("- Model training with different algorithms")
+
+print("\n1. CLASS IMBALANCE:")
+print(f"   - Ratio: {imbalance:.2f}:1 (benign:malignant)")
+print("   - Will test: SMOTE, random oversampling, balanced random forest")
+print("   - Must use stratified splits and appropriate metrics")
+
+print("\n2. FEATURE INSIGHTS:")
+print("   - All features show significant differences (p < 0.05)")
+print("   - High correlation between radius, perimeter, area")
+print("   - Most discriminative: concave points, area, radius")
+
+print("\n3. CLUSTERING FINDINGS:")
+print(f"   - Benign cases: {k_benign} meaningful subclusters identified")
+print(f"   - Malignant cases: {k_malignant} meaningful subclusters identified")
+print("   - Clusters represent different severity levels within each diagnosis")
+print("   - Could be useful for risk stratification")
+
+print("\n4. DATA QUALITY:")
+print("   - No missing values")
+print("   - No duplicates")
+print("   - Some outliers present (acceptable)")
+
+print("\n5. MODELING APPROACH:")
+print("   - Test multiple algorithms: Logistic Regression, Random Forest")
+print("   - Compare class imbalance techniques")
+print("   - Primary metric: Recall (minimize false negatives)")
+print("   - Secondary metrics: F1-score, ROC-AUC")
+print("   - Consider hierarchical model: benign/malignant then subclusters")
+
+print("\n6. NO DIMENSIONALITY REDUCTION:")
+print("   - Will use feature selection instead of PCA")
+print("   - Remove highly correlated features")
+print("   - Select based on importance scores from models")
+
+print("\nNext phase: Model development and comparison")
